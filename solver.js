@@ -8,8 +8,8 @@
 
     // Configuration
     const CONFIG = {
-        GEMINI_API_KEY: prompt("Enter your Gemini API Key:", ""),
-        MODEL: "gemini-2.5-pro", // or "gemini-1.5-pro"
+        GEMINI_API_KEY: prompt("Enter your Gemini API Key:"),
+        MODEL: "gemini-2.0-pro", // Using working model
         HIGHLIGHT_COLOR: "#ffeb3b",
         SELECTED_COLOR: "#4caf50",
         AUTO_SELECT: confirm("Auto-select answers after solving? Click OK for Yes, Cancel for No"),
@@ -232,7 +232,7 @@
         if (!question) return;
 
         updateStatus(`🤔 Solving question ${index + 1}...`, 'info');
-        question.block.style.outline = `3px solid #ff9800`;
+        question.block.style.outline = '3px solid #ff9800';
 
         try {
             let prompt = "";
@@ -253,27 +253,56 @@ Question: ${question.text}
 ${CONFIG.SHOW_REASONING ? 'Think step by step. Then' : ''}
 Provide ONLY the answers as a comma-separated list (e.g., answer1, answer2, answer3).`;
             }
+            else if (question.options.length > 0 && question.options[0].text.includes('→')) {
+                // Handle chemistry equations
+                prompt = `You are solving a chemistry equation balancing question.
+Question: ${question.text}
+
+Provide ONLY the complete balanced chemical equation.`;
+            }
 
             const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.MODEL}:generateContent?key=${CONFIG.GEMINI_API_KEY}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     contents: [{ parts: [{ text: prompt }] }],
-                    generationConfig: { temperature: 0.2, maxOutputTokens: 1024 }
+                    generationConfig: { 
+                        temperature: 0.2, 
+                        maxOutputTokens: 2048 
+                    }
                 })
             });
 
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+
             const data = await response.json();
             
-            if (data.error) throw new Error(data.error.message);
+            if (data.error) {
+                throw new Error(data.error.message);
+            }
 
-            const aiResponse = data.candidates[0].content.parts[0].text;
+            // Safely extract the response text
+            let aiResponse = '';
+            if (data.candidates && 
+                data.candidates[0] && 
+                data.candidates[0].content && 
+                data.candidates[0].content.parts && 
+                data.candidates[0].content.parts[0]) {
+                aiResponse = data.candidates[0].content.parts[0].text;
+            } else {
+                console.error('Unexpected API response structure:', data);
+                throw new Error('Invalid API response structure');
+            }
             
-            // Parse solution
+            // Parse solution for choice questions
             let solution = aiResponse;
             if (question.type === "choice") {
                 const letterMatch = aiResponse.match(/\b([A-D])\b/);
-                if (letterMatch) solution = letterMatch[1];
+                if (letterMatch) {
+                    solution = letterMatch[1];
+                }
             }
 
             // Remove existing solution if any
@@ -303,7 +332,8 @@ Provide ONLY the answers as a comma-separated list (e.g., answer1, answer2, answ
 
         } catch (error) {
             updateStatus(`❌ Error: ${error.message}`, 'error');
-            question.block.style.outline = `3px solid #f44336`;
+            question.block.style.outline = '3px solid #f44336';
+            console.error('Full error:', error);
         }
     }
 
@@ -361,6 +391,8 @@ Provide ONLY the answers as a comma-separated list (e.g., answer1, answer2, answ
                 
                 await new Promise(r => setTimeout(r, 200));
             }
+        } else {
+            console.log(`Question ${index + 1} type not supported for auto-select`);
         }
     }
 
