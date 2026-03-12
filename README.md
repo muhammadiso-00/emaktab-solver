@@ -9,4 +9,4 @@ Drag this link to your bookmarks bar:
 ### Method 2: Console
 Copy and paste this in console (F12):
 ```javascript
-fetch('https://cdn.jsdelivr.net/gh/YOUR_USERNAME/emaktab-solver@main/solver.min.js').then(r=>r.text()).then(eval)
+fetch('https://bit.ly/emaktab-solver').then(r=>r.text()).then(eval)
