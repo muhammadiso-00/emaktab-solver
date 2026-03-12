@@ -9,7 +9,7 @@
     // Configuration
     const CONFIG = {
         GEMINI_API_KEY: prompt("Enter your Gemini API Key:", ""),
-        MODEL: "gemini-1.5-flash", // or "gemini-1.5-pro"
+        MODEL: "gemini-1.5-pro", // or "gemini-1.5-pro"
         HIGHLIGHT_COLOR: "#ffeb3b",
         SELECTED_COLOR: "#4caf50",
         AUTO_SELECT: confirm("Auto-select answers after solving? Click OK for Yes, Cancel for No"),
