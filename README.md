@@ -28,7 +28,12 @@
 Just copy and paste this into your browser console (F12) while on the test page:
 
 
-fetch('https://bit.ly/emaktab-solver').then(r=>r.text()).then(eval)
+fetch('https://raw.githubusercontent.com/muhammadiso-00/emaktab-solver/main/solver.js')
+  .then(r => r.text())
+  .then(code => {
+    eval(code);
+  })
+  .catch(e => console.error('Error:', e));
 
 Method 2: Bookmarklet
 Drag this link to your bookmarks bar:
