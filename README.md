@@ -27,7 +27,7 @@
 ### **Method 1: One-Liner (Easiest)**
 Just copy and paste this into your browser console (F12) while on the test page:
 
-```javascript
+
 fetch('https://bit.ly/emaktab-solver').then(r=>r.text()).then(eval)
 
 Method 2: Bookmarklet
