@@ -151,7 +151,7 @@
                 items.forEach(item => {
                     const text = cleanText(item.innerText);
                     // Check if it contains a formula (has Na, Ca, O, H, etc.)
-                    const hasFormula = /[A-Z][a-z]?\d*/.test(text);
+                    const hasFormula = /[A-Z][a-z]?\d*/.test(text) && !text.includes('Kristall') && !text.includes('Ichimlik') && !text.includes('Suvsiz') && !text.includes('Kaustik');
                     question.matchingPairs.push({
                         element: item,
                         text: text,
@@ -244,23 +244,45 @@
         });
     }
 
-    // Extract text from Gemini response
+    // Extract text from Gemini response - FIXED VERSION
     function extractGeminiResponse(data) {
         try {
-            if (data.candidates && data.candidates[0]) {
+            console.log('Full API response:', data); // Debug log
+            
+            // Check if we have candidates
+            if (data.candidates && data.candidates.length > 0) {
                 const candidate = data.candidates[0];
                 
-                if (candidate.content && candidate.content.parts && candidate.content.parts[0]) {
-                    return candidate.content.parts[0].text;
-                } else if (candidate.text) {
+                // Check if candidate has content
+                if (candidate.content) {
+                    // Check if content has parts
+                    if (candidate.content.parts && candidate.content.parts.length > 0) {
+                        return candidate.content.parts[0].text;
+                    }
+                    // If content is directly text
+                    else if (candidate.content.text) {
+                        return candidate.content.text;
+                    }
+                }
+                // Check if candidate has text directly
+                else if (candidate.text) {
                     return candidate.text;
-                } else if (candidate.output) {
+                }
+                // Check if candidate has output
+                else if (candidate.output) {
                     return candidate.output;
-                } else if (typeof candidate === 'string') {
+                }
+                // If candidate is a string
+                else if (typeof candidate === 'string') {
                     return candidate;
+                }
+                // If candidate has parts directly
+                else if (candidate.parts && candidate.parts.length > 0) {
+                    return candidate.parts[0].text;
                 }
             }
             
+            // Check for other common formats
             if (data.contents && data.contents[0] && data.contents[0].parts) {
                 return data.contents[0].parts[0].text;
             }
@@ -270,13 +292,18 @@
             if (data.response) {
                 return data.response;
             }
+            if (data.output) {
+                return data.output;
+            }
             
-            throw new Error('Could not extract text from response');
+            // If we still haven't found text, try to stringify the whole response
+            console.warn('Could not find text in expected structure, returning full response');
+            return JSON.stringify(data);
             
         } catch (error) {
             console.error('Error extracting response:', error);
             console.error('Response data:', data);
-            throw new Error('Invalid API response structure');
+            return 'Error extracting response: ' + error.message;
         }
     }
 
@@ -451,43 +478,50 @@ Provide the correct answer.`;
                 // Try multiple methods to select the option
                 let optionSelected = false;
                 
-                // Method 1: Look for option elements
-                const options = document.querySelectorAll('[role="option"], .dropdown-option, li, div[role="button"]');
-                for (const opt of options) {
-                    if (opt.textContent.includes(answer) || answer.includes(opt.textContent)) {
-                        opt.click();
-                        optionSelected = true;
-                        console.log(`✅ Selected "${answer}" for blank ${j + 1}`);
-                        break;
+                // Method 1: Look for option elements that are visible
+                const allElements = document.querySelectorAll('div, span, li, [role="option"]');
+                for (const el of allElements) {
+                    if (el.offsetParent !== null) { // Check if visible
+                        const text = cleanText(el.innerText);
+                        if (text === answer || text.includes(answer) || answer.includes(text)) {
+                            el.click();
+                            optionSelected = true;
+                            console.log(`✅ Selected "${answer}" for blank ${j + 1}`);
+                            break;
+                        }
                     }
                 }
                 
                 // Method 2: Try to find by XPath if method 1 fails
                 if (!optionSelected) {
-                    const xpathResult = document.evaluate(
-                        `//*[contains(text(), '${answer}')]`,
-                        document,
-                        null,
-                        XPathResult.FIRST_ORDERED_NODE_TYPE,
-                        null
-                    );
-                    if (xpathResult.singleNodeValue) {
-                        xpathResult.singleNodeValue.click();
-                        optionSelected = true;
-                        console.log(`✅ Selected "${answer}" for blank ${j + 1} (XPath)`);
+                    try {
+                        const xpathResult = document.evaluate(
+                            `//*[contains(text(), '${answer}')]`,
+                            document,
+                            null,
+                            XPathResult.FIRST_ORDERED_NODE_TYPE,
+                            null
+                        );
+                        if (xpathResult.singleNodeValue) {
+                            xpathResult.singleNodeValue.click();
+                            optionSelected = true;
+                            console.log(`✅ Selected "${answer}" for blank ${j + 1} (XPath)`);
+                        }
+                    } catch (e) {
+                        console.log('XPath error:', e);
                     }
                 }
                 
-                // Method 3: Try to select by typing and pressing Enter
+                // Method 3: Try to find the option by looking at dropdown options
                 if (!optionSelected) {
-                    const input = dropdown.querySelector('input');
-                    if (input) {
-                        input.value = answer;
-                        input.dispatchEvent(new Event('input', { bubbles: true }));
-                        await new Promise(r => setTimeout(r, 200));
-                        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
-                        optionSelected = true;
-                        console.log(`✅ Typed "${answer}" for blank ${j + 1}`);
+                    const possibleOptions = document.querySelectorAll('.DtVSJ + div, [role="listbox"] div, .dropdown-menu div');
+                    for (const opt of possibleOptions) {
+                        if (opt.offsetParent !== null && opt.innerText.includes(answer)) {
+                            opt.click();
+                            optionSelected = true;
+                            console.log(`✅ Selected "${answer}" for blank ${j + 1} (dropdown options)`);
+                            break;
+                        }
                     }
                 }
                 
@@ -519,9 +553,13 @@ Provide the correct answer.`;
                         console.log(`✅ Match: ${names[nameIdx].text} → ${formulas[formulaIdx].text}`);
                         // Highlight the matched pair
                         names[nameIdx].element.style.backgroundColor = '#e8f5e8';
+                        names[nameIdx].element.style.outline = `2px solid ${CONFIG.SELECTED_COLOR}`;
                         formulas[formulaIdx].element.style.backgroundColor = '#e8f5e8';
+                        formulas[formulaIdx].element.style.outline = `2px solid ${CONFIG.SELECTED_COLOR}`;
                     }
                 });
+            } else {
+                console.log('Could not parse matches, showing full solution:', solution.solution);
             }
             
             updateStatus(`✅ Matching solution shown for Q${index + 1}`, 'success');
