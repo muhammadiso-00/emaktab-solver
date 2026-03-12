@@ -9,7 +9,7 @@
     // Configuration
     const CONFIG = {
         GEMINI_API_KEY: prompt("Enter your Gemini API Key:"),
-        MODEL: "gemini-2.0-pro", // Using working model
+        MODEL: "gemini-2.5-pro",
         HIGHLIGHT_COLOR: "#ffeb3b",
         SELECTED_COLOR: "#4caf50",
         AUTO_SELECT: confirm("Auto-select answers after solving? Click OK for Yes, Cancel for No"),
@@ -131,26 +131,43 @@
             const questionText = cleanText(block.innerText);
             const options = block.querySelectorAll('[data-test-id^="answer-"]');
             const dropdowns = block.querySelectorAll('.DtVSJ.dbzdF');
+            
+            // Check if it's a matching question (like the soda example)
+            const isMatchingQuestion = block.querySelectorAll('.YBX37.bdL_6').length > 0;
 
             const question = {
                 index: index,
                 block: block,
                 text: questionText,
-                type: options.length > 0 ? 'choice' : (dropdowns.length > 0 ? 'dropdown' : 'unknown'),
+                type: isMatchingQuestion ? 'matching' : (options.length > 0 ? 'choice' : (dropdowns.length > 0 ? 'dropdown' : 'unknown')),
                 options: [],
-                dropdowns: []
+                dropdowns: [],
+                matchingPairs: []
             };
 
-            if (options.length > 0) {
+            if (isMatchingQuestion) {
+                // Handle matching questions (like soda names to formulas)
+                const items = block.querySelectorAll('.YBX37.bdL_6');
+                items.forEach(item => {
+                    const text = cleanText(item.innerText);
+                    // Check if it contains a formula (has Na, Ca, O, H, etc.)
+                    const hasFormula = /[A-Z][a-z]?\d*/.test(text);
+                    question.matchingPairs.push({
+                        element: item,
+                        text: text,
+                        isFormula: hasFormula,
+                        formula: hasFormula ? text : null,
+                        name: !hasFormula ? text : null
+                    });
+                });
+            } else if (options.length > 0) {
                 options.forEach(opt => {
                     question.options.push({
                         element: opt,
                         text: cleanText(opt.innerText)
                     });
                 });
-            }
-
-            if (dropdowns.length > 0) {
+            } else if (dropdowns.length > 0) {
                 dropdowns.forEach(dd => {
                     question.dropdowns.push({
                         element: dd,
@@ -171,7 +188,8 @@
             text: q.text.substring(0, 100) + '...',
             type: q.type,
             options: q.options.map(o => o.text),
-            blanks: q.dropdowns.length
+            blanks: q.dropdowns.length,
+            matchingPairs: q.matchingPairs.length
         }));
         copyToClipboard(JSON.stringify(summary, null, 2));
     }
@@ -226,6 +244,42 @@
         });
     }
 
+    // Extract text from Gemini response
+    function extractGeminiResponse(data) {
+        try {
+            if (data.candidates && data.candidates[0]) {
+                const candidate = data.candidates[0];
+                
+                if (candidate.content && candidate.content.parts && candidate.content.parts[0]) {
+                    return candidate.content.parts[0].text;
+                } else if (candidate.text) {
+                    return candidate.text;
+                } else if (candidate.output) {
+                    return candidate.output;
+                } else if (typeof candidate === 'string') {
+                    return candidate;
+                }
+            }
+            
+            if (data.contents && data.contents[0] && data.contents[0].parts) {
+                return data.contents[0].parts[0].text;
+            }
+            if (data.text) {
+                return data.text;
+            }
+            if (data.response) {
+                return data.response;
+            }
+            
+            throw new Error('Could not extract text from response');
+            
+        } catch (error) {
+            console.error('Error extracting response:', error);
+            console.error('Response data:', data);
+            throw new Error('Invalid API response structure');
+        }
+    }
+
     // Solve single question
     async function solveQuestion(index) {
         const question = questions[index];
@@ -253,19 +307,39 @@ Question: ${question.text}
 ${CONFIG.SHOW_REASONING ? 'Think step by step. Then' : ''}
 Provide ONLY the answers as a comma-separated list (e.g., answer1, answer2, answer3).`;
             }
-            else if (question.options.length > 0 && question.options[0].text.includes('→')) {
-                // Handle chemistry equations
-                prompt = `You are solving a chemistry equation balancing question.
+            else if (question.type === "matching") {
+                // Separate names and formulas
+                const names = question.matchingPairs.filter(p => !p.isFormula).map(p => p.text);
+                const formulas = question.matchingPairs.filter(p => p.isFormula).map(p => p.text);
+                
+                prompt = `You are solving a chemistry matching question. Match each name with its correct chemical formula.
+
+Names:
+${names.map((name, idx) => `${idx + 1}. ${name}`).join('\n')}
+
+Formulas:
+${formulas.map((formula, idx) => `${String.fromCharCode(65 + idx)}. ${formula}`).join('\n')}
+
+${CONFIG.SHOW_REASONING ? 'Think step by step. Then' : ''}
+Provide the matches in this format: "1-A, 2-B, 3-C" (where number is the name and letter is the formula).`;
+            }
+            else {
+                prompt = `You are solving a test question.
 Question: ${question.text}
 
-Provide ONLY the complete balanced chemical equation.`;
+${CONFIG.SHOW_REASONING ? 'Think step by step. Then' : ''}
+Provide the correct answer.`;
             }
 
             const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.MODEL}:generateContent?key=${CONFIG.GEMINI_API_KEY}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    contents: [{ parts: [{ text: prompt }] }],
+                    contents: [{ 
+                        parts: [{ 
+                            text: prompt 
+                        }] 
+                    }],
                     generationConfig: { 
                         temperature: 0.2, 
                         maxOutputTokens: 2048 
@@ -274,7 +348,8 @@ Provide ONLY the complete balanced chemical equation.`;
             });
 
             if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
+                const errorText = await response.text();
+                throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
             }
 
             const data = await response.json();
@@ -283,26 +358,18 @@ Provide ONLY the complete balanced chemical equation.`;
                 throw new Error(data.error.message);
             }
 
-            // Safely extract the response text
-            let aiResponse = '';
-            if (data.candidates && 
-                data.candidates[0] && 
-                data.candidates[0].content && 
-                data.candidates[0].content.parts && 
-                data.candidates[0].content.parts[0]) {
-                aiResponse = data.candidates[0].content.parts[0].text;
-            } else {
-                console.error('Unexpected API response structure:', data);
-                throw new Error('Invalid API response structure');
-            }
+            let aiResponse = extractGeminiResponse(data);
             
-            // Parse solution for choice questions
+            // Parse solution based on question type
             let solution = aiResponse;
             if (question.type === "choice") {
                 const letterMatch = aiResponse.match(/\b([A-D])\b/);
                 if (letterMatch) {
                     solution = letterMatch[1];
                 }
+            } else if (question.type === "matching") {
+                // Store the full matching response
+                solution = aiResponse;
             }
 
             // Remove existing solution if any
@@ -343,7 +410,7 @@ Provide ONLY the complete balanced chemical equation.`;
         
         for (let i = 0; i < questions.length; i++) {
             await solveQuestion(i);
-            await new Promise(r => setTimeout(r, 1500)); // Rate limiting
+            await new Promise(r => setTimeout(r, 1500));
         }
         
         updateStatus(`✅ All questions solved!`, 'success');
@@ -377,22 +444,97 @@ Provide ONLY the complete balanced chemical equation.`;
                 const answer = answers[j];
                 const dropdown = question.dropdowns[j].element;
                 
+                // Click to open dropdown
                 dropdown.click();
-                await new Promise(r => setTimeout(r, 300));
+                await new Promise(r => setTimeout(r, 500)); // Wait longer for dropdown to open
                 
-                const option = Array.from(document.querySelectorAll('[role="option"], .dropdown-option, li'))
-                    .find(el => el.textContent.includes(answer));
+                // Try multiple methods to select the option
+                let optionSelected = false;
                 
-                if (option) {
-                    option.click();
-                } else {
+                // Method 1: Look for option elements
+                const options = document.querySelectorAll('[role="option"], .dropdown-option, li, div[role="button"]');
+                for (const opt of options) {
+                    if (opt.textContent.includes(answer) || answer.includes(opt.textContent)) {
+                        opt.click();
+                        optionSelected = true;
+                        console.log(`✅ Selected "${answer}" for blank ${j + 1}`);
+                        break;
+                    }
+                }
+                
+                // Method 2: Try to find by XPath if method 1 fails
+                if (!optionSelected) {
+                    const xpathResult = document.evaluate(
+                        `//*[contains(text(), '${answer}')]`,
+                        document,
+                        null,
+                        XPathResult.FIRST_ORDERED_NODE_TYPE,
+                        null
+                    );
+                    if (xpathResult.singleNodeValue) {
+                        xpathResult.singleNodeValue.click();
+                        optionSelected = true;
+                        console.log(`✅ Selected "${answer}" for blank ${j + 1} (XPath)`);
+                    }
+                }
+                
+                // Method 3: Try to select by typing and pressing Enter
+                if (!optionSelected) {
+                    const input = dropdown.querySelector('input');
+                    if (input) {
+                        input.value = answer;
+                        input.dispatchEvent(new Event('input', { bubbles: true }));
+                        await new Promise(r => setTimeout(r, 200));
+                        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+                        optionSelected = true;
+                        console.log(`✅ Typed "${answer}" for blank ${j + 1}`);
+                    }
+                }
+                
+                if (!optionSelected) {
+                    console.log(`❌ Could not select "${answer}" for blank ${j + 1}`);
+                    // Press Escape to close dropdown
                     document.dispatchEvent(new KeyboardEvent('keydown', {'key': 'Escape'}));
                 }
                 
-                await new Promise(r => setTimeout(r, 200));
+                await new Promise(r => setTimeout(r, 300));
             }
-        } else {
-            console.log(`Question ${index + 1} type not supported for auto-select`);
+        }
+        else if (question.type === "matching") {
+            console.log(`📝 Matching question ${index + 1} - manual selection needed`);
+            console.log('Solution:', solution.solution);
+            
+            // Parse the matching solution
+            const matches = solution.solution.match(/\d+-[A-Z]/g);
+            if (matches) {
+                const names = question.matchingPairs.filter(p => !p.isFormula);
+                const formulas = question.matchingPairs.filter(p => p.isFormula);
+                
+                matches.forEach(match => {
+                    const [nameIndex, formulaLetter] = match.split('-');
+                    const nameIdx = parseInt(nameIndex) - 1;
+                    const formulaIdx = formulaLetter.charCodeAt(0) - 65;
+                    
+                    if (nameIdx >= 0 && nameIdx < names.length && formulaIdx >= 0 && formulaIdx < formulas.length) {
+                        console.log(`✅ Match: ${names[nameIdx].text} → ${formulas[formulaIdx].text}`);
+                        // Highlight the matched pair
+                        names[nameIdx].element.style.backgroundColor = '#e8f5e8';
+                        formulas[formulaIdx].element.style.backgroundColor = '#e8f5e8';
+                    }
+                });
+            }
+            
+            updateStatus(`✅ Matching solution shown for Q${index + 1}`, 'success');
+        }
+
+        // Save progress
+        if (question.type !== 'matching') {
+            const progress = {
+                timestamp: new Date().toISOString(),
+                solved: solutions.length,
+                total: questions.length
+            };
+            localStorage.setItem('emaktabProgress', JSON.stringify(progress));
         }
     }
 
@@ -416,7 +558,11 @@ Provide ONLY the complete balanced chemical equation.`;
                 text: q.text,
                 type: q.type,
                 options: q.options.map(o => o.text),
-                blanks: q.dropdowns.length
+                blanks: q.dropdowns.length,
+                matchingPairs: q.matchingPairs.map(p => ({
+                    text: p.text,
+                    isFormula: p.isFormula
+                }))
             })),
             solutions: solutions
         };
@@ -435,6 +581,7 @@ Provide ONLY the complete balanced chemical equation.`;
         });
         renderQuestionsList();
         updateStatus('🧹 All cleared', 'info');
+        localStorage.removeItem('emaktabProgress');
     }
 
     // Copy to clipboard
@@ -447,6 +594,15 @@ Provide ONLY the complete balanced chemical equation.`;
         document.body.removeChild(textarea);
     }
 
+    // Load saved progress
+    function loadProgress() {
+        const saved = localStorage.getItem('emaktabProgress');
+        if (saved) {
+            const progress = JSON.parse(saved);
+            console.log('📊 Previous progress:', progress);
+        }
+    }
+
     // Initialize
     console.log(`
 ╔════════════════════════════════════╗
@@ -457,5 +613,6 @@ Provide ONLY the complete balanced chemical equation.`;
 ╚════════════════════════════════════╝
     `);
 
+    loadProgress();
     createUIPanel();
 })();
