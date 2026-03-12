@@ -58,39 +58,117 @@
   }
 
   /**
-   * Opens a custom dropdown, waits for options to render, then clicks the match.
-   * Tries multiple selector strategies used by eMaktab.
+   * Opens a custom eMaktab dropdown and clicks the matching option.
+   *
+   * Strategy:
+   *  1. Click the trigger to open the menu.
+   *  2. Poll for a popup that appears NEAR the trigger (positional proximity).
+   *  3. Inside that popup, collect every leaf text node as a candidate.
+   *  4. Pick the best fuzzy match and click it.
+   *
+   * This handles eMaktab's custom React dropdowns whose options are plain
+   * <div>/<p> elements with no semantic role attributes.
    */
   async function selectDropdown(triggerEl, answerText) {
+    const norm = s => cleanText(s).toLowerCase().replace(/\s+/g, ' ');
+    const target = norm(answerText);
+
+    // Remember bounding rect of the trigger so we can find its popup.
+    const triggerRect = triggerEl.getBoundingClientRect();
+
+    // Open the dropdown.
     reactClick(triggerEl);
 
-    // Poll up to 2 s for visible options
-    let opts = [];
-    for (let i = 0; i < 20; i++) {
-      await delay(100);
-      const selectors = ['[role="option"]', '[role="menuitem"]', '.qBIhg', 'li'];
-      for (const sel of selectors) {
-        opts = [...document.querySelectorAll(sel)].filter(el => el.offsetParent !== null);
-        if (opts.length) break;
+    // ── Step 1: find the popup container ──────────────────────────────────────
+    // We look for any element that (a) appeared after the click, (b) is visible,
+    // (c) is positioned close to the trigger (within 400 px vertically).
+    let popup = null;
+    for (let attempt = 0; attempt < 25; attempt++) {
+      await delay(80);
+
+      // Candidate containers: common class names eMaktab / React-Select use.
+      const containerSelectors = [
+        '[class*="menu"]', '[class*="dropdown"]', '[class*="select"]',
+        '[class*="listbox"]', '[class*="options"]', '[class*="popup"]',
+        '[role="listbox"]', '[role="menu"]',
+      ];
+
+      for (const sel of containerSelectors) {
+        const candidates = [...document.querySelectorAll(sel)].filter(el => {
+          if (!el.offsetParent) return false;           // must be visible
+          const r = el.getBoundingClientRect();
+          if (r.width < 30 || r.height < 10) return false; // must have size
+          // Must be near the trigger vertically
+          return Math.abs(r.top - triggerRect.bottom) < 400 ||
+                 Math.abs(r.bottom - triggerRect.top) < 400;
+        });
+        if (candidates.length) { popup = candidates[0]; break; }
       }
-      if (opts.length) break;
+
+      // Fallback: if still no popup, scan for any newly-visible element whose
+      // text exactly matches one of the answer words (for eMaktab's bare divs).
+      if (!popup) {
+        const allVisible = [...document.querySelectorAll('div, p, span')]
+          .filter(el => {
+            if (!el.offsetParent) return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 20 && r.height > 8 &&
+                   r.top > triggerRect.top - 10 &&
+                   r.top < triggerRect.bottom + 350;
+          });
+
+        // Find one whose text is a short option-like string containing our answer
+        const directHit = allVisible.find(el => {
+          const t = norm(el.innerText || el.textContent);
+          return t.length < 60 && (t === target || t.includes(target) || target.includes(t));
+        });
+
+        if (directHit) {
+          // The element itself is the option — click it directly.
+          reactClick(directHit);
+          console.log(`[Dropdown] Direct hit: "${cleanText(directHit.innerText)}"`);
+          return true;
+        }
+      }
+
+      if (popup) break;
     }
 
-    const norm = s => cleanText(s).toLowerCase();
-    const match = opts.find(el => {
-      const t = norm(el.innerText || el.textContent);
-      return t === norm(answerText) || t.includes(norm(answerText)) || norm(answerText).includes(t);
-    });
+    // ── Step 2: collect leaf-level option elements inside popup ───────────────
+    if (popup) {
+      // Walk all descendant elements; prefer leaves (no child elements with text).
+      const allEls = [...popup.querySelectorAll('*')].filter(el => el.offsetParent !== null);
 
-    if (match) {
-      reactClick(match);
-      console.log(`[Dropdown] Selected: "${cleanText(match.innerText)}"`);
-      return true;
+      // Score each element: exact match > contains > contained-in
+      const scored = allEls
+        .map(el => {
+          const t = norm(el.innerText || el.textContent || '');
+          if (!t || t.length > 80) return null;
+          let score = 0;
+          if (t === target) score = 3;
+          else if (t.includes(target)) score = 2;
+          else if (target.includes(t) && t.length > 1) score = 1;
+          return score > 0 ? { el, score, t } : null;
+        })
+        .filter(Boolean)
+        .sort((a, b) => b.score - a.score || a.t.length - b.t.length); // prefer shorter = more leaf-like
+
+      if (scored.length) {
+        const best = scored[0].el;
+        reactClick(best);
+        console.log(`[Dropdown] Selected (score ${scored[0].score}): "${cleanText(best.innerText)}"`);
+        return true;
+      }
+
+      console.warn(`[Dropdown] Popup found but no match for "${answerText}". Options:`,
+        allEls.map(e => cleanText(e.innerText)).filter(t => t && t.length < 60));
+    } else {
+      console.warn(`[Dropdown] No popup detected for trigger. Answer: "${answerText}"`);
     }
 
-    // Close stray open menus
+    // Close any stray open menu.
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-    console.warn(`[Dropdown] Could not find option: "${answerText}"`);
+    console.warn(`[Dropdown] Could not select: "${answerText}"`);
     return false;
   }
 
@@ -151,7 +229,7 @@
 
   // ─── EXTRACT ─────────────────────────────────────────────────────────────────
 
-  function extractQuestions() {
+  async function extractQuestions() {
     questions = [];
     const blocks = document.querySelectorAll('[data-test-id^="block-"]');
     if (!blocks.length) { setStatus('No blocks found!', 'error'); return; }
@@ -216,14 +294,24 @@
       }
 
       // ── DROPDOWN ──
+      // Also peek inside the closed dropdown to grab available option texts,
+      // so the AI prompt can reference them and return exact matching strings.
       else if (q.type === 'dropdown') {
-        dropdownEls.forEach(el => q.dropdowns.push({ element: el }));
+        dropdownEls.forEach(el => {
+          const optEls = el.querySelectorAll('li, [role="option"], div > p, div > span');
+          const preloadedOpts = [...optEls]
+            .map(o => cleanText(o.innerText))
+            .filter(t => t && t.length < 50 && t !== cleanText(el.innerText));
+          q.dropdowns.push({ element: el, preloadedOpts });
+        });
       }
 
       questions.push(q);
     });
 
     renderList();
+    setStatus(`Extracted ${questions.length} questions — scanning dropdowns…`, 'success');
+    await prescanDropdowns();
     setStatus(`Extracted ${questions.length} questions`, 'success');
 
     // Copy summary to clipboard
@@ -237,6 +325,52 @@
       dropdowns: q.dropdowns.length,
     }));
     copyToClipboard(JSON.stringify(summary, null, 2));
+  }
+
+  /**
+   * For each dropdown question, briefly open each dropdown to harvest its
+   * option list, then close it. This runs once after extraction so that
+   * solveQuestion() can include the real option texts in the AI prompt.
+   */
+  async function prescanDropdowns() {
+    const ddQuestions = questions.filter(q => q.type === 'dropdown');
+    if (!ddQuestions.length) return;
+
+    console.log(`[Prescan] Scanning ${ddQuestions.length} dropdown question(s)…`);
+
+    for (const q of ddQuestions) {
+      for (const dd of q.dropdowns) {
+        if (dd.preloadedOpts && dd.preloadedOpts.length) continue; // already have options
+
+        // Open dropdown
+        reactClick(dd.element);
+        await delay(500); // wait for React to render the list
+
+        // Collect all short, visible text nodes near the dropdown
+        const triggerRect = dd.element.getBoundingClientRect();
+        const candidates = [...document.querySelectorAll('*')].filter(el => {
+          if (!el.offsetParent) return false;
+          const r = el.getBoundingClientRect();
+          if (r.width < 20 || r.height < 5) return false;
+          return r.top >= triggerRect.bottom - 5 && r.top <= triggerRect.bottom + 400;
+        });
+
+        const opts = candidates
+          .map(el => cleanText(el.innerText || el.textContent))
+          .filter(t => t && t.length > 0 && t.length < 60)
+          .filter((t, i, arr) => arr.indexOf(t) === i); // dedupe
+
+        if (opts.length) {
+          dd.preloadedOpts = opts;
+          console.log(`[Prescan] Found options for blank:`, opts);
+        }
+
+        // Close
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        await delay(300);
+      }
+    }
+    console.log('[Prescan] Done.');
   }
 
   // ─── RENDER LIST ─────────────────────────────────────────────────────────────
@@ -330,8 +464,22 @@ ${cats[0]}: 1, 3
 ${cats[1]}: 2, 4`;
 
     } else if (q.type === 'dropdown') {
-      prompt = `Fill in the blanks. Reply with ONLY comma-separated answers in order.
-${q.text}`;
+      // Build per-blank option hints if we were able to pre-load them
+      const blankDescriptions = q.dropdowns.map((dd, i) => {
+        const opts = dd.preloadedOpts && dd.preloadedOpts.length
+          ? `\n   Available choices: ${dd.preloadedOpts.join(', ')}`
+          : '';
+        return `Blank ${i + 1}:${opts}`;
+      }).join('\n');
+      prompt = `Fill in the blanks. You MUST reply ONLY with the answers as a comma-separated list — nothing else.
+Each answer must exactly match one of the available choices listed below (same spelling, same case).
+
+Question text:
+${q.text}
+
+${blankDescriptions}
+
+Reply format example: UGU, тирозин, серин`;
     } else {
       setStatus(`Q${index + 1}: unknown type`, 'warning');
       return;
