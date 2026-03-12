@@ -9,7 +9,7 @@
     // Configuration
     const CONFIG = {
         GEMINI_API_KEY: prompt("Enter your Gemini API Key:"),
-        MODEL: "gemini-2.5-pro",
+        MODEL: "gemini-3.1-pro-preview",
         HIGHLIGHT_COLOR: "#ffeb3b",
         SELECTED_COLOR: "#4caf50",
         AUTO_SELECT: confirm("Auto-select answers after solving? Click OK for Yes, Cancel for No"),
@@ -132,26 +132,72 @@
             const options = block.querySelectorAll('[data-test-id^="answer-"]');
             const dropdowns = block.querySelectorAll('.DtVSJ.dbzdF');
             
-            // Check if it's a matching question (like the soda example)
+            // Check if it's a matching question
             const isMatchingQuestion = block.querySelectorAll('.YBX37.bdL_6').length > 0;
+            
+            // Check if it's a table-based biology question (like protein synthesis)
+            const isTableQuestion = questionText.includes('jadval') || 
+                                    (questionText.includes('zanjir') && 
+                                     questionText.includes('antikodon') && 
+                                     questionText.includes('aminokislota'));
 
             const question = {
                 index: index,
                 block: block,
                 text: questionText,
-                type: isMatchingQuestion ? 'matching' : (options.length > 0 ? 'choice' : (dropdowns.length > 0 ? 'dropdown' : 'unknown')),
+                type: isMatchingQuestion ? 'matching' : 
+                      (isTableQuestion ? 'biology-table' : 
+                       (options.length > 0 ? 'choice' : 
+                        (dropdowns.length > 0 ? 'dropdown' : 'unknown'))),
                 options: [],
                 dropdowns: [],
-                matchingPairs: []
+                matchingPairs: [],
+                tableData: null
             };
 
-            if (isMatchingQuestion) {
-                // Handle matching questions (like soda names to formulas)
+            if (isTableQuestion) {
+                // Try to extract table data
+                const tableElements = block.querySelectorAll('table, tr, td, ._ZhFj');
+                const tableText = block.innerText;
+                
+                // Extract the DNA sequence
+                const dnaMatch = tableText.match(/[ATCG]{3}/);
+                const dnaSequence = dnaMatch ? dnaMatch[0] : null;
+                
+                // Extract amino acid
+                const aaMatch = tableText.match(/(gistidin|izoleysin|tirozin|arginin|serin)/i);
+                const aminoAcid = aaMatch ? aaMatch[0].toLowerCase() : null;
+                
+                // Extract possible antikodon options
+                const options = tableText.match(/[ATCG]{3}/g) || [];
+                
+                question.tableData = {
+                    dnaSequence: dnaSequence,
+                    aminoAcid: aminoAcid,
+                    options: options.filter(opt => opt !== dnaSequence)
+                };
+                
+                // Also get the actual option elements
+                options.forEach(opt => {
+                    const optionElements = Array.from(block.querySelectorAll('[data-test-id^="answer-"]'));
+                    optionElements.forEach(el => {
+                        if (cleanText(el.innerText).includes(opt)) {
+                            question.options.push({
+                                element: el,
+                                text: opt
+                            });
+                        }
+                    });
+                });
+            } else if (isMatchingQuestion) {
                 const items = block.querySelectorAll('.YBX37.bdL_6');
                 items.forEach(item => {
                     const text = cleanText(item.innerText);
-                    // Check if it contains a formula (has Na, Ca, O, H, etc.)
-                    const hasFormula = /[A-Z][a-z]?\d*/.test(text) && !text.includes('Kristall') && !text.includes('Ichimlik') && !text.includes('Suvsiz') && !text.includes('Kaustik');
+                    const hasFormula = /[A-Z][a-z]?\d*/.test(text) && 
+                                      !text.includes('Kristall') && 
+                                      !text.includes('Ichimlik') && 
+                                      !text.includes('Suvsiz') && 
+                                      !text.includes('Kaustik');
                     question.matchingPairs.push({
                         element: item,
                         text: text,
@@ -189,7 +235,8 @@
             type: q.type,
             options: q.options.map(o => o.text),
             blanks: q.dropdowns.length,
-            matchingPairs: q.matchingPairs.length
+            matchingPairs: q.matchingPairs.length,
+            tableData: q.tableData
         }));
         copyToClipboard(JSON.stringify(summary, null, 2));
     }
@@ -244,66 +291,30 @@
         });
     }
 
-    // Extract text from Gemini response - FIXED VERSION
+    // Extract text from Gemini response
     function extractGeminiResponse(data) {
         try {
-            console.log('Full API response:', data); // Debug log
-            
-            // Check if we have candidates
             if (data.candidates && data.candidates.length > 0) {
                 const candidate = data.candidates[0];
                 
-                // Check if candidate has content
-                if (candidate.content) {
-                    // Check if content has parts
-                    if (candidate.content.parts && candidate.content.parts.length > 0) {
-                        return candidate.content.parts[0].text;
-                    }
-                    // If content is directly text
-                    else if (candidate.content.text) {
-                        return candidate.content.text;
-                    }
-                }
-                // Check if candidate has text directly
-                else if (candidate.text) {
+                if (candidate.content && candidate.content.parts && candidate.content.parts.length > 0) {
+                    return candidate.content.parts[0].text;
+                } else if (candidate.content && candidate.content.text) {
+                    return candidate.content.text;
+                } else if (candidate.parts && candidate.parts.length > 0) {
+                    return candidate.parts[0].text;
+                } else if (candidate.text) {
                     return candidate.text;
-                }
-                // Check if candidate has output
-                else if (candidate.output) {
+                } else if (candidate.output) {
                     return candidate.output;
                 }
-                // If candidate is a string
-                else if (typeof candidate === 'string') {
-                    return candidate;
-                }
-                // If candidate has parts directly
-                else if (candidate.parts && candidate.parts.length > 0) {
-                    return candidate.parts[0].text;
-                }
             }
             
-            // Check for other common formats
-            if (data.contents && data.contents[0] && data.contents[0].parts) {
-                return data.contents[0].parts[0].text;
-            }
-            if (data.text) {
-                return data.text;
-            }
-            if (data.response) {
-                return data.response;
-            }
-            if (data.output) {
-                return data.output;
-            }
-            
-            // If we still haven't found text, try to stringify the whole response
-            console.warn('Could not find text in expected structure, returning full response');
-            return JSON.stringify(data);
+            return "[No text content in response]";
             
         } catch (error) {
             console.error('Error extracting response:', error);
-            console.error('Response data:', data);
-            return 'Error extracting response: ' + error.message;
+            return '[Error extracting response]';
         }
     }
 
@@ -317,6 +328,7 @@
 
         try {
             let prompt = "";
+            let maxTokens = 4096;
             
             if (question.type === "choice") {
                 prompt = `You are solving a multiple choice test question. 
@@ -324,18 +336,45 @@ Question: ${question.text}
 Options:
 ${question.options.map((opt, idx) => `${String.fromCharCode(65 + idx)}. ${opt.text}`).join('\n')}
 
-${CONFIG.SHOW_REASONING ? 'Think step by step. Then' : ''} 
 Provide ONLY the letter of the correct answer (A, B, C, or D).`;
+                maxTokens = 1024;
             } 
+            else if (question.type === "biology-table") {
+                // Special handling for biology table questions
+                const tableData = question.tableData || {};
+                prompt = `You are solving a biology/protein synthesis question.
+
+Question: ${question.text}
+
+DNA sequence: ${tableData.dnaSequence || 'unknown'}
+Given amino acid: ${tableData.aminoAcid || 'unknown'}
+
+Genetic code provided in the question:
+- CAC — gistidin
+- AUA — izoleysin
+- UAU — tirozin
+- AGG — arginin
+- UCC — serin
+
+To solve:
+1. DNA sequence is given as the "2-zanjir" (second strand)
+2. If this is the second strand, first transcribe to mRNA (DNA A→U, T→A, C→G, G→C)
+3. Then find which codon codes for the given amino acid
+4. The antikodon is complementary to the codon (mRNA codon ↔ tRNA antikodon)
+
+First, transcribe the DNA "${tableData.dnaSequence}" to mRNA, then find what antikodon would bring the amino acid "${tableData.aminoAcid}".
+
+Provide the answer in this format: "The correct antikodon is XXX" where XXX is the 3-letter code.`;
+                maxTokens = 2048;
+            }
             else if (question.type === "dropdown") {
                 prompt = `You are solving a fill-in-the-blanks test question with ${question.dropdowns.length} blanks.
 Question: ${question.text}
 
-${CONFIG.SHOW_REASONING ? 'Think step by step. Then' : ''}
 Provide ONLY the answers as a comma-separated list (e.g., answer1, answer2, answer3).`;
+                maxTokens = 2048;
             }
             else if (question.type === "matching") {
-                // Separate names and formulas
                 const names = question.matchingPairs.filter(p => !p.isFormula).map(p => p.text);
                 const formulas = question.matchingPairs.filter(p => p.isFormula).map(p => p.text);
                 
@@ -347,15 +386,8 @@ ${names.map((name, idx) => `${idx + 1}. ${name}`).join('\n')}
 Formulas:
 ${formulas.map((formula, idx) => `${String.fromCharCode(65 + idx)}. ${formula}`).join('\n')}
 
-${CONFIG.SHOW_REASONING ? 'Think step by step. Then' : ''}
 Provide the matches in this format: "1-A, 2-B, 3-C" (where number is the name and letter is the formula).`;
-            }
-            else {
-                prompt = `You are solving a test question.
-Question: ${question.text}
-
-${CONFIG.SHOW_REASONING ? 'Think step by step. Then' : ''}
-Provide the correct answer.`;
+                maxTokens = 4096;
             }
 
             const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.MODEL}:generateContent?key=${CONFIG.GEMINI_API_KEY}`, {
@@ -368,15 +400,16 @@ Provide the correct answer.`;
                         }] 
                     }],
                     generationConfig: { 
-                        temperature: 0.2, 
-                        maxOutputTokens: 2048 
+                        temperature: 0.1, // Lower temperature for more consistent answers
+                        maxOutputTokens: maxTokens,
+                        topP: 0.8
                     }
                 })
             });
 
             if (!response.ok) {
                 const errorText = await response.text();
-                throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
+                throw new Error(`HTTP error! status: ${response.status}`);
             }
 
             const data = await response.json();
@@ -387,16 +420,28 @@ Provide the correct answer.`;
 
             let aiResponse = extractGeminiResponse(data);
             
-            // Parse solution based on question type
+            // Special parsing for biology questions
             let solution = aiResponse;
-            if (question.type === "choice") {
+            if (question.type === "biology-table") {
+                // Try to extract the antikodon from the response
+                const antikodonMatch = aiResponse.match(/[ATCG]{3}/);
+                if (antikodonMatch) {
+                    solution = antikodonMatch[0];
+                } else {
+                    // If no 3-letter code found, check if it matches any option
+                    if (question.options.length > 0) {
+                        const optionTexts = question.options.map(o => o.text);
+                        const foundOption = optionTexts.find(opt => aiResponse.includes(opt));
+                        if (foundOption) {
+                            solution = foundOption;
+                        }
+                    }
+                }
+            } else if (question.type === "choice") {
                 const letterMatch = aiResponse.match(/\b([A-D])\b/);
                 if (letterMatch) {
                     solution = letterMatch[1];
                 }
-            } else if (question.type === "matching") {
-                // Store the full matching response
-                solution = aiResponse;
             }
 
             // Remove existing solution if any
@@ -464,6 +509,27 @@ Provide the correct answer.`;
                 updateStatus(`✅ Selected option ${answerLetter} for Q${index + 1}`, 'success');
             }
         }
+        else if (question.type === "biology-table") {
+            // For biology table questions, try to select the matching option
+            const solutionText = solution.solution;
+            if (question.options.length > 0) {
+                // Find option that matches the solution
+                const matchingOption = question.options.find(opt => 
+                    opt.text === solutionText || opt.text.includes(solutionText)
+                );
+                
+                if (matchingOption) {
+                    matchingOption.element.click();
+                    matchingOption.element.style.outline = `3px solid ${CONFIG.SELECTED_COLOR}`;
+                    matchingOption.element.style.backgroundColor = '#e8f5e8';
+                    updateStatus(`✅ Selected ${matchingOption.text} for Q${index + 1}`, 'success');
+                } else {
+                    console.log('Available options:', question.options.map(o => o.text));
+                    console.log('Solution was:', solutionText);
+                    updateStatus(`⚠️ Could not find matching option for Q${index + 1}`, 'warning');
+                }
+            }
+        }
         else if (question.type === "dropdown") {
             const answers = solution.solution.split(',').map(a => a.trim());
             
@@ -471,17 +537,14 @@ Provide the correct answer.`;
                 const answer = answers[j];
                 const dropdown = question.dropdowns[j].element;
                 
-                // Click to open dropdown
                 dropdown.click();
-                await new Promise(r => setTimeout(r, 500)); // Wait longer for dropdown to open
+                await new Promise(r => setTimeout(r, 500));
                 
-                // Try multiple methods to select the option
                 let optionSelected = false;
                 
-                // Method 1: Look for option elements that are visible
                 const allElements = document.querySelectorAll('div, span, li, [role="option"]');
                 for (const el of allElements) {
-                    if (el.offsetParent !== null) { // Check if visible
+                    if (el.offsetParent !== null) {
                         const text = cleanText(el.innerText);
                         if (text === answer || text.includes(answer) || answer.includes(text)) {
                             el.click();
@@ -492,7 +555,6 @@ Provide the correct answer.`;
                     }
                 }
                 
-                // Method 2: Try to find by XPath if method 1 fails
                 if (!optionSelected) {
                     try {
                         const xpathResult = document.evaluate(
@@ -505,29 +567,12 @@ Provide the correct answer.`;
                         if (xpathResult.singleNodeValue) {
                             xpathResult.singleNodeValue.click();
                             optionSelected = true;
-                            console.log(`✅ Selected "${answer}" for blank ${j + 1} (XPath)`);
                         }
-                    } catch (e) {
-                        console.log('XPath error:', e);
-                    }
-                }
-                
-                // Method 3: Try to find the option by looking at dropdown options
-                if (!optionSelected) {
-                    const possibleOptions = document.querySelectorAll('.DtVSJ + div, [role="listbox"] div, .dropdown-menu div');
-                    for (const opt of possibleOptions) {
-                        if (opt.offsetParent !== null && opt.innerText.includes(answer)) {
-                            opt.click();
-                            optionSelected = true;
-                            console.log(`✅ Selected "${answer}" for blank ${j + 1} (dropdown options)`);
-                            break;
-                        }
-                    }
+                    } catch (e) {}
                 }
                 
                 if (!optionSelected) {
                     console.log(`❌ Could not select "${answer}" for blank ${j + 1}`);
-                    // Press Escape to close dropdown
                     document.dispatchEvent(new KeyboardEvent('keydown', {'key': 'Escape'}));
                 }
                 
@@ -535,44 +580,8 @@ Provide the correct answer.`;
             }
         }
         else if (question.type === "matching") {
-            console.log(`📝 Matching question ${index + 1} - manual selection needed`);
-            console.log('Solution:', solution.solution);
-            
-            // Parse the matching solution
-            const matches = solution.solution.match(/\d+-[A-Z]/g);
-            if (matches) {
-                const names = question.matchingPairs.filter(p => !p.isFormula);
-                const formulas = question.matchingPairs.filter(p => p.isFormula);
-                
-                matches.forEach(match => {
-                    const [nameIndex, formulaLetter] = match.split('-');
-                    const nameIdx = parseInt(nameIndex) - 1;
-                    const formulaIdx = formulaLetter.charCodeAt(0) - 65;
-                    
-                    if (nameIdx >= 0 && nameIdx < names.length && formulaIdx >= 0 && formulaIdx < formulas.length) {
-                        console.log(`✅ Match: ${names[nameIdx].text} → ${formulas[formulaIdx].text}`);
-                        // Highlight the matched pair
-                        names[nameIdx].element.style.backgroundColor = '#e8f5e8';
-                        names[nameIdx].element.style.outline = `2px solid ${CONFIG.SELECTED_COLOR}`;
-                        formulas[formulaIdx].element.style.backgroundColor = '#e8f5e8';
-                        formulas[formulaIdx].element.style.outline = `2px solid ${CONFIG.SELECTED_COLOR}`;
-                    }
-                });
-            } else {
-                console.log('Could not parse matches, showing full solution:', solution.solution);
-            }
-            
+            console.log(`📝 Matching question ${index + 1}:`, solution.solution);
             updateStatus(`✅ Matching solution shown for Q${index + 1}`, 'success');
-        }
-
-        // Save progress
-        if (question.type !== 'matching') {
-            const progress = {
-                timestamp: new Date().toISOString(),
-                solved: solutions.length,
-                total: questions.length
-            };
-            localStorage.setItem('emaktabProgress', JSON.stringify(progress));
         }
     }
 
@@ -600,7 +609,8 @@ Provide the correct answer.`;
                 matchingPairs: q.matchingPairs.map(p => ({
                     text: p.text,
                     isFormula: p.isFormula
-                }))
+                })),
+                tableData: q.tableData
             })),
             solutions: solutions
         };
@@ -619,7 +629,6 @@ Provide the correct answer.`;
         });
         renderQuestionsList();
         updateStatus('🧹 All cleared', 'info');
-        localStorage.removeItem('emaktabProgress');
     }
 
     // Copy to clipboard
@@ -632,15 +641,6 @@ Provide the correct answer.`;
         document.body.removeChild(textarea);
     }
 
-    // Load saved progress
-    function loadProgress() {
-        const saved = localStorage.getItem('emaktabProgress');
-        if (saved) {
-            const progress = JSON.parse(saved);
-            console.log('📊 Previous progress:', progress);
-        }
-    }
-
     // Initialize
     console.log(`
 ╔════════════════════════════════════╗
@@ -651,6 +651,5 @@ Provide the correct answer.`;
 ╚════════════════════════════════════╝
     `);
 
-    loadProgress();
     createUIPanel();
 })();
