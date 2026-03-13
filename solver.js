@@ -73,16 +73,20 @@
     document.body.appendChild(form);
 
     document.getElementById('es-start').onclick = () => {
-      const key = document.getElementById('es-key').value.trim();
+      // Read ALL values BEFORE removing the form from the DOM
+      const key        = document.getElementById('es-key').value.trim();
+      const model      = document.getElementById('es-model').value.trim() || 'gemini-2.5-pro-preview-05-06';
+      const autoSelect = document.getElementById('es-auto').checked;
+      const showLog    = document.getElementById('es-log').checked;
       if (!key) { document.getElementById('es-err').textContent = 'API key required.'; return; }
-      form.remove();
+      form.remove(); // safe now — all values already captured above
       boot({
         GEMINI_API_KEY: key,
-        MODEL:          document.getElementById('es-model').value.trim() || 'gemini-2.5-pro-preview-05-06',
+        MODEL:          model,
         HIGHLIGHT_COLOR:'#ffeb3b',
         SELECTED_COLOR: '#4caf50',
-        AUTO_SELECT:    document.getElementById('es-auto').checked,
-        SHOW_REASONING: document.getElementById('es-log').checked,
+        AUTO_SELECT:    autoSelect,
+        SHOW_REASONING: showLog,
       });
     };
 
