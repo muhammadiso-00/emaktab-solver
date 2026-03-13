@@ -2,24 +2,98 @@
 // EMAKTAB TEST SOLVER - v2.0 (Fixed)
 // https://raw.githubusercontent.com/muhammadiso-00/emaktab-solver/main/solver.js
 //
-// Inject via console:
-// fetch('https://raw.githubusercontent.com/muhammadiso-00/emaktab-solver/main/solver.js')
-//   .then(r=>r.text()).then(eval);
+// INJECT METHOD (paste in console):
+//
+//   window.__EMAKTAB_CONFIG__ = {
+//     GEMINI_API_KEY: 'YOUR_KEY_HERE',
+//     AUTO_SELECT: true,
+//     SHOW_REASONING: false,
+//   };
+//   fetch('https://raw.githubusercontent.com/muhammadiso-00/emaktab-solver/main/solver.js')
+//     .then(r=>r.text()).then(eval);
+//
+// OR just run without pre-setting config — a setup form will appear.
 // ===========================================
 
 (function () {
   'use strict';
 
-  const CONFIG = {
-    GEMINI_API_KEY: prompt('Enter your Gemini API Key:'),
-    MODEL: 'gemini-3.1-pro-preview',
-    HIGHLIGHT_COLOR: '#ffeb3b',
-    SELECTED_COLOR: '#4caf50',
-    AUTO_SELECT: confirm('Auto-select answers after solving? OK=Yes'),
-    SHOW_REASONING: confirm('Show AI reasoning in console? OK=Yes'),
-  };
+  // ── CONFIG BOOTSTRAP ──────────────────────────────────────────────────────
+  // If the user pre-set window.__EMAKTAB_CONFIG__ before eval, use it directly.
+  // Otherwise show a small inline form (no prompt/confirm — they are blocked
+  // by Chrome when called inside cross-origin eval).
 
-  if (!CONFIG.GEMINI_API_KEY) { alert('No API key provided. Exiting.'); return; }
+  const PRE = window.__EMAKTAB_CONFIG__ || {};
+
+  if (PRE.GEMINI_API_KEY) {
+    // Pre-configured — start immediately.
+    boot({
+      GEMINI_API_KEY: PRE.GEMINI_API_KEY,
+      MODEL:          PRE.MODEL          || 'gemini-2.5-pro-preview-05-06',
+      HIGHLIGHT_COLOR:'#ffeb3b',
+      SELECTED_COLOR: '#4caf50',
+      AUTO_SELECT:    PRE.AUTO_SELECT    !== undefined ? PRE.AUTO_SELECT    : true,
+      SHOW_REASONING: PRE.SHOW_REASONING !== undefined ? PRE.SHOW_REASONING : false,
+    });
+  } else {
+    // Show a tiny setup form so the user can enter their key.
+    showSetupForm();
+  }
+
+  function showSetupForm() {
+    // Remove any stale form
+    document.getElementById('emaktab-setup')?.remove();
+
+    const form = document.createElement('div');
+    form.id = 'emaktab-setup';
+    form.style.cssText = `
+      position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+      background:#fff;border:2px solid #2196F3;border-radius:12px;
+      padding:24px;z-index:9999999;font-family:Arial,sans-serif;
+      box-shadow:0 8px 32px rgba(0,0,0,.25);width:320px;color:#333;`;
+    form.innerHTML = `
+      <h3 style="margin:0 0 16px;color:#2196F3;font-size:15px;">Emaktab Solver — Setup</h3>
+      <label style="font-size:12px;color:#666;">Gemini API Key</label><br>
+      <input id="es-key" type="password" placeholder="AIza…"
+        style="width:100%;box-sizing:border-box;padding:7px 10px;margin:4px 0 12px;
+               border:1px solid #ccc;border-radius:6px;font-size:13px;"><br>
+      <label style="font-size:12px;color:#666;">Model</label><br>
+      <input id="es-model" value="gemini-2.5-pro-preview-05-06"
+        style="width:100%;box-sizing:border-box;padding:7px 10px;margin:4px 0 12px;
+               border:1px solid #ccc;border-radius:6px;font-size:13px;"><br>
+      <div style="display:flex;gap:12px;margin-bottom:16px;">
+        <label style="font-size:12px;"><input type="checkbox" id="es-auto" checked> Auto-select</label>
+        <label style="font-size:12px;"><input type="checkbox" id="es-log">  Show reasoning</label>
+      </div>
+      <button id="es-start"
+        style="width:100%;padding:9px;background:#2196F3;color:#fff;border:none;
+               border-radius:6px;font-size:14px;cursor:pointer;">Start Solver</button>
+      <div id="es-err" style="color:red;font-size:12px;margin-top:8px;"></div>`;
+
+    document.body.appendChild(form);
+
+    document.getElementById('es-start').onclick = () => {
+      const key = document.getElementById('es-key').value.trim();
+      if (!key) { document.getElementById('es-err').textContent = 'API key required.'; return; }
+      form.remove();
+      boot({
+        GEMINI_API_KEY: key,
+        MODEL:          document.getElementById('es-model').value.trim() || 'gemini-2.5-pro-preview-05-06',
+        HIGHLIGHT_COLOR:'#ffeb3b',
+        SELECTED_COLOR: '#4caf50',
+        AUTO_SELECT:    document.getElementById('es-auto').checked,
+        SHOW_REASONING: document.getElementById('es-log').checked,
+      });
+    };
+
+    // Allow Enter key to submit
+    document.getElementById('es-key').addEventListener('keydown', e => {
+      if (e.key === 'Enter') document.getElementById('es-start').click();
+    });
+  }
+
+  // Everything else lives inside boot() so it only runs after CONFIG is ready.
+  function boot(CONFIG) {
 
   let questions = [], solutions = [], panel = null;
 
@@ -670,7 +744,9 @@ Reply format example: UGU, тирозин, серин`;
 
   // ─── INIT ────────────────────────────────────────────────────────────────────
 
-  createPanel();
-  console.log('%cEmaktab Solver v2 loaded!', 'color:#2196F3;font-weight:bold;font-size:14px');
+    createPanel();
+    console.log('%cEmaktab Solver v2 loaded!', 'color:#2196F3;font-weight:bold;font-size:14px');
+
+  } // end boot()
 
 })();
