@@ -29,7 +29,7 @@
     // Pre-configured — start immediately.
     boot({
       GEMINI_API_KEY: PRE.GEMINI_API_KEY,
-      MODEL:          PRE.MODEL          || 'gemini-2.5-pro-preview-05-06',
+      MODEL:          PRE.MODEL          || 'gemini-3.1-pro-preview',
       HIGHLIGHT_COLOR:'#ffeb3b',
       SELECTED_COLOR: '#4caf50',
       AUTO_SELECT:    PRE.AUTO_SELECT    !== undefined ? PRE.AUTO_SELECT    : true,
@@ -58,7 +58,7 @@
         style="width:100%;box-sizing:border-box;padding:7px 10px;margin:4px 0 12px;
                border:1px solid #ccc;border-radius:6px;font-size:13px;"><br>
       <label style="font-size:12px;color:#666;">Model</label><br>
-      <input id="es-model" value="gemini-2.5-pro-preview-05-06"
+      <input id="es-model" value="gemini-3.1-pro-preview"
         style="width:100%;box-sizing:border-box;padding:7px 10px;margin:4px 0 12px;
                border:1px solid #ccc;border-radius:6px;font-size:13px;"><br>
       <div style="display:flex;gap:12px;margin-bottom:16px;">
@@ -75,7 +75,7 @@
     document.getElementById('es-start').onclick = () => {
       // Read ALL values BEFORE removing the form from the DOM
       const key        = document.getElementById('es-key').value.trim();
-      const model      = document.getElementById('es-model').value.trim() || 'gemini-2.5-pro-preview-05-06';
+      const model      = document.getElementById('es-model').value.trim() || 'gemini-3.1-pro-preview';
       const autoSelect = document.getElementById('es-auto').checked;
       const showLog    = document.getElementById('es-log').checked;
       if (!key) { document.getElementById('es-err').textContent = 'API key required.'; return; }
